@@ -5,6 +5,12 @@ set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_ARCHITECTURES 89)
 
+# Add ImGui include directories
+include_directories(
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/backends
+)
+
 # CUDA compiler flags - common flags
 set(CUDA_COMMON_FLAGS "\
     --expt-relaxed-constexpr \
@@ -24,14 +30,20 @@ endif()
 
 # Source files
 file(GLOB_RECURSE CUDA_SOURCES "src/*.cu")
-	
+file(GLOB_RECURSE CPP_SOURCES "src/*.cpp")
+
 # Main executable
-add_executable(${PROJECT_NAME} ${CUDA_SOURCES})
+add_executable(${PROJECT_NAME}
+    ${CUDA_SOURCES}
+    ${CPP_SOURCES}
+    ${IMGUI_SOURCES}
+)
 
 # Include directories
-target_include_directories(${PROJECT_NAME} 
+target_include_directories(${PROJECT_NAME}
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${OPENGL_INCLUDE_DIR}
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
@@ -50,19 +62,22 @@ target_link_libraries(${PROJECT_NAME}
         CUDA::cudart
         CUDA::cuda_driver
         CUDA::curand
+        glfw
+        OpenGL::GL
+        dl
 )
 
 # Add these lines at the end
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # Create cuda-ptx directory
     file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/cuda-ptx)
-    
+
     set_target_properties(${PROJECT_NAME} PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON
         CUDA_RESOLVE_DEVICE_SYMBOLS ON
         POSITION_INDEPENDENT_CODE ON
     )
-    
+
     target_compile_options(${PROJECT_NAME} PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:-G>
         $<$<COMPILE_LANGUAGE:CUDA>:-src-in-ptx>
