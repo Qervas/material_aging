@@ -9,6 +9,7 @@
 #include "Vec3.cuh"
 #include "Color.cuh"
 #include "Error.cuh"
+#include "AgingUI.cuh"
 
 
 
@@ -16,16 +17,16 @@
 __global__ void convertToRGBAKernel(const float4* input, uint32_t* output, uint32_t width, uint32_t height) {
     uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
-    
+
     if (x >= width || y >= height) return;
-    
+
     uint32_t idx = y * width + x;
     float4 pixel = input[idx];
-    
+
     uint8_t r = static_cast<uint8_t>(min(max(pixel.x * 255.0f, 0.0f), 255.0f));
     uint8_t g = static_cast<uint8_t>(min(max(pixel.y * 255.0f, 0.0f), 255.0f));
     uint8_t b = static_cast<uint8_t>(min(max(pixel.z * 255.0f, 0.0f), 255.0f));
-    
+
     output[idx] = (r << 16) | (g << 8) | b;
 }
 
@@ -43,14 +44,15 @@ private:
     int center_x_, center_y_;
     bool mouse_captured_;
     bool key_states_[256];   // Simplified key state tracking
+    AgingUI* aging_ui_;
+
 
 public:
-    __host__ Window_t(uint32_t width, uint32_t height, const char* title) 
+    __host__ Window_t(uint32_t width, uint32_t height, const char* title)
         : width_(width)
         , height_(height)
         , running_(true)
-        , mouse_captured_(false)
-    {
+        , mouse_captured_(false){
         // Initialize X11 window
         display_ = XOpenDisplay(nullptr);
         if (!display_) {
@@ -91,6 +93,8 @@ public:
         center_y_ = height_ / 2;
 
         memset(key_states_, 0, sizeof(key_states_));
+        aging_ui_ = new AgingUI(display_);
+
     }
 
     __host__ ~Window_t() {
@@ -100,6 +104,7 @@ public:
         if (display_) XCloseDisplay(display_);
         if (h_buffer_) delete[] h_buffer_;
         if (d_buffer_) cudaFree(d_buffer_);
+        if (aging_ui_) delete aging_ui_;
     }
 
     __host__ void toggleMouseCapture() {
@@ -118,7 +123,7 @@ public:
             XDefineCursor(display_, window_, invisibleCursor);
             XFreeCursor(display_, invisibleCursor);
             XFreePixmap(display_, bitmapNoData);
-            
+
             XWarpPointer(display_, None, window_, 0, 0, 0, 0, center_x_, center_y_);
         } else {
             XUndefineCursor(display_, window_);
@@ -126,7 +131,7 @@ public:
         XFlush(display_);
     }
 
-     __host__ bool processEvents() {
+    __host__ bool processEvents() {
         XEvent event;
 
         while (XPending(display_)) {
@@ -137,6 +142,14 @@ public:
                     if (key == XK_Escape) running_ = false;
                     break;
                 }
+                // Add UI event handling
+                case ButtonPress:
+                case ButtonRelease:
+                case MotionNotify:
+                    if (aging_ui_) {
+                        aging_ui_->processEvent(event);
+                    }
+                    break;
             }
         }
         return running_;
@@ -146,19 +159,19 @@ public:
     // method to call the kernel
     void convertToRGBA(const float4* input, uint32_t* output) {
         dim3 block(16, 16);
-        dim3 grid((width_ + block.x - 1) / block.x, 
+        dim3 grid((width_ + block.x - 1) / block.x,
                  (height_ + block.y - 1) / block.y);
-        
+
         convertToRGBAKernel<<<grid, block>>>(input, output, width_, height_);
     }
 
     __host__ void updateScreen(const float4* d_pixels) {
         // Convert float4 to uint32_t on GPU
         convertToRGBA(d_pixels, d_buffer_);
-        
+
         // Copy to host
         cudaMemcpy(h_buffer_, d_buffer_, width_ * height_ * sizeof(uint32_t), cudaMemcpyDeviceToHost);
-        
+
         // Update X11 window
         XPutImage(display_, window_, gc_, image_, 0, 0, 0, 0, width_, height_);
         XFlush(display_);
@@ -178,4 +191,7 @@ public:
 
     // Get device buffer pointer for direct rendering
     __host__ uint32_t* getDeviceBuffer() const { return d_buffer_; }
-}; 
+    __host__ Display* getDisplay() const { return display_; }
+    __host__ AgingUI* getAgingUI() const { return aging_ui_; }
+
+};

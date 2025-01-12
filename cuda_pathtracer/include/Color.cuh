@@ -58,8 +58,16 @@ public:
 
     __host__ __device__ static Color_t fromFloat3(const float3& f) {
         return Color_t(f.x, f.y, f.z);
-    }	
+    }
 };
+
+__host__ __device__ inline Color_t lerp(const Color_t& a, const Color_t& b, float t) {
+    return Color_t(
+        a.r + (b.r - a.r) * t,
+        a.g + (b.g - a.g) * t,
+        a.b + (b.b - a.b) * t
+    );
+}
 
 // Non-member operators
 __host__ __device__ inline Color_t operator+(const Color_t& a, const Color_t& b) {

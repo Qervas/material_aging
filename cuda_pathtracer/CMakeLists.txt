@@ -5,12 +5,6 @@ set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_ARCHITECTURES 89)
 
-# Add ImGui include directories
-include_directories(
-    ${imgui_SOURCE_DIR}
-    ${imgui_SOURCE_DIR}/backends
-)
-
 # CUDA compiler flags - common flags
 set(CUDA_COMMON_FLAGS "\
     --expt-relaxed-constexpr \
@@ -36,7 +30,6 @@ file(GLOB_RECURSE CPP_SOURCES "src/*.cpp")
 add_executable(${PROJECT_NAME}
     ${CUDA_SOURCES}
     ${CPP_SOURCES}
-    ${IMGUI_SOURCES}
 )
 
 # Include directories
@@ -62,12 +55,11 @@ target_link_libraries(${PROJECT_NAME}
         CUDA::cudart
         CUDA::cuda_driver
         CUDA::curand
-        glfw
         OpenGL::GL
-        dl
+        ${CMAKE_DL_LIBS}
 )
 
-# Add these lines at the end
+# Debug configuration
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # Create cuda-ptx directory
     file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/cuda-ptx)

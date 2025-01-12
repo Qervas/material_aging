@@ -40,11 +40,11 @@ public:
     __host__ __device__ Material_t* getMaterial() const { return material_; }
 
     __host__ __device__ virtual Point3f_t getCenter() const {
-        return Point3f_t(); 
+        return Point3f_t();
     }
 
     __host__ __device__ virtual float getRadius() const {
-        return 0.0f; 
+        return 0.0f;
     }
 
 	__host__ __device__ virtual bool isPlane() const {
@@ -52,11 +52,11 @@ public:
 	}
 
     __host__ __device__ virtual bool isSphere() const {
-        return false; 
+        return false;
     }
 
     __host__ __device__ virtual Point3f_t sampleSurface(float u, float v) const {
-        return Point3f_t(); 
+        return Point3f_t();
     }
 };
 
@@ -128,18 +128,18 @@ public:
     __host__ __device__ bool isSphere() const override {
         return true;
     }
-    
+
     __host__ __device__ Point3f_t sampleSurface(float u, float v) const override {
         const float theta = 2.0f * M_PI * u;
         const float phi = acosf(2.0f * v - 1.0f);
-        
+
         const float sin_phi = sinf(phi);
         const Vec3f_t direction(
             cosf(theta) * sin_phi,
             sinf(theta) * sin_phi,
             cosf(phi)
         );
-        
+
         return center_ + direction * radius_;
     }
 
@@ -170,13 +170,13 @@ public:
         hit.hit = false;
 
         const float denom = dot(normal_, ray.direction);
-        
+
         if (fabsf(denom) < 1e-8f) {
             return hit;
         }
 
         const float t = dot(point_ - ray.origin, normal_) / denom;
-        
+
         if (!ray.isValidDistance(t)) {
             return hit;
         }
@@ -202,4 +202,4 @@ public:
     __host__ __device__ const Point3f_t& getPoint() const { return point_; }
     __host__ __device__ const Vec3f_t& getNormal() const { return normal_; }
     __host__ __device__ bool isPlane() const override { return true; }
-}; 
+};

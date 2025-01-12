@@ -5,19 +5,28 @@
 #include "Ray.cuh"
 #include "Intersection.cuh"
 #include "ScatterRecord.cuh"
+#include "AgingEffects.cuh"
 #include <curand_kernel.h>
+
+enum class MaterialType {
+    LAMBERTIAN,
+    METAL,
+    DIELECTRIC,
+    GLOSSY,
+    EMISSIVE
+};
 
 // Base material class
 class Material_t {
 public:
     __device__ virtual ~Material_t() = default;
-    
+
     __device__ virtual bool scatter(
         const Ray_t& ray_in,
         const Intersection_t& hit,
         ScatterRecord_t& srec,
         curandState* rand_state) const = 0;
-    
+
     __device__ virtual float scatteringPdf(
         const Ray_t& ray_in,
         const Intersection_t& hit,
@@ -30,12 +39,16 @@ public:
         const Intersection_t& hit) const {
         return Color_t(0.0f);
     }
+    __device__ virtual MaterialType getType() const = 0;
+
 };
 
 // Lambertian (diffuse) material
 class Lambertian_t : public Material_t {
 private:
     Color_t albedo_;
+    float roughness_;
+    RustParameters rust_params_;
 
 public:
     __device__ Lambertian_t(const Color_t& albedo) : albedo_(albedo) {}
@@ -45,7 +58,7 @@ public:
         const Intersection_t& hit,
         ScatterRecord_t& srec,
         curandState* rand_state) const override {
-        
+
         // Create ONB (orthonormal basis) from hit normal
         Vec3f_t w = hit.normal;
         Vec3f_t a = (fabsf(w.x) > 0.9f) ? Vec3f_t(0, 1, 0) : Vec3f_t(1, 0, 0);
@@ -76,6 +89,12 @@ public:
         float cosine = dot(hit.normal, scattered.direction);
         return cosine <= 0 ? 0 : cosine / M_PI;
     }
+
+    __device__ void setRustParameters(const RustParameters& params) {
+        rust_params_ = params;
+    }
+    __device__ MaterialType getType() const override { return MaterialType::LAMBERTIAN; }
+
 };
 
 // Metal material
@@ -83,6 +102,9 @@ class Metal_t : public Material_t {
 private:
     Color_t albedo_;
     float roughness_;
+    float metallic_;
+    RustParameters rust_params_;
+    bool use_aging_{false};
 
     __device__ Vec3f_t reflect(const Vec3f_t& v, const Vec3f_t& n) const {
         return v - n * 2.0f * dot(v, n);
@@ -92,6 +114,7 @@ public:
     __device__ Metal_t(const Color_t& albedo, float roughness)
         : albedo_(albedo)
         , roughness_(roughness < 1.0f ? roughness : 1.0f)
+        , rust_params_()
     {}
 
     __device__ virtual bool scatter(
@@ -99,9 +122,9 @@ public:
         const Intersection_t& hit,
         ScatterRecord_t& srec,
         curandState* rand_state) const override {
-        
+
         Vec3f_t reflected = reflect(ray_in.direction, hit.normal);
-        
+
         // randomness for roughness
         if (roughness_ > 0.0f) {
             Vec3f_t random = Vec3f_t(
@@ -113,12 +136,25 @@ public:
         }
 
         srec.scattered_ray = Ray_t(hit.point + reflected * 0.001f, reflected);
-        srec.attenuation = albedo_;
+        if (use_aging_) {
+            float noise_value = curand_uniform(rand_state);
+            srec.attenuation = AgingEffects::applyRustEffect(
+                albedo_, hit.point, rust_params_, noise_value);
+        } else {
+            srec.attenuation = albedo_;
+        }
         srec.is_specular = true;
         srec.pdf = 1.0f;
 
         return dot(reflected, hit.normal) > 0;
     }
+
+    __device__ void setRustParameters(const RustParameters& params) {
+        rust_params_ = params;
+        use_aging_ = true;
+    }
+    __device__ MaterialType getType() const override { return MaterialType::METAL; }
+
 };
 
 // Dielectric (glass) material
@@ -151,7 +187,7 @@ public:
         const Intersection_t& hit,
         ScatterRecord_t& srec,
         curandState* rand_state) const override {
-        
+
         srec.is_specular = true;
         srec.pdf = 1.0f;
         srec.attenuation = Color_t(1.0f);
@@ -173,6 +209,8 @@ public:
         srec.scattered_ray = Ray_t(hit.point + direction * 0.001f, direction);
         return true;
     }
+    __device__ MaterialType getType() const override { return MaterialType::DIELECTRIC; }
+
 };
 
 class Glossy_t : public Material_t {
@@ -180,12 +218,15 @@ private:
     Color_t albedo_;
     float roughness_;
     float metallic_;
+    PaintAgingParameters paint_params_;
+    bool use_aging_{false};
 
 public:
     __device__ Glossy_t(const Color_t& albedo, float roughness, float metallic = 1.0f)
         : albedo_(albedo)
         , roughness_(roughness)
         , metallic_(metallic)
+        , paint_params_()
     {}
 
     __device__ bool scatter(const Ray_t& ray_in, const Intersection_t& isect, ScatterRecord_t& srec, curandState* rand_state) const override {
@@ -205,7 +246,19 @@ public:
 
         // Interpolate between metallic reflection and diffuse reflection
         Color_t specular_color = metallic_ > 0.5f ? albedo_ : Color_t(1.0f);
-        srec.attenuation = lerp(albedo_, specular_color, metallic_);
+        if (use_aging_) {
+            float noise_value = curand_uniform(rand_state);
+            Color_t aged_color = AgingEffects::applyPaintAging(
+                albedo_, isect.point, paint_params_, noise_value);
+
+            // Interpolate between metallic reflection and aged color
+            Color_t specular_color = metallic_ > 0.5f ? aged_color : Color_t(1.0f);
+            srec.attenuation = lerp(aged_color, specular_color, metallic_);
+        } else {
+            // Original behavior without aging
+            Color_t specular_color = metallic_ > 0.5f ? albedo_ : Color_t(1.0f);
+            srec.attenuation = lerp(albedo_, specular_color, metallic_);
+        }
 
         srec.pdf = 1.0f;
         srec.is_specular = true;
@@ -215,6 +268,14 @@ public:
     __device__ float scatteringPdf(const Ray_t& ray_in, const Intersection_t& isect, const Ray_t& scattered) const override {
         return 1.0f;
     }
+
+    __device__ void setPaintParameters(const PaintAgingParameters& params) {
+        paint_params_ = params;
+        use_aging_ = true;
+    }
+
+    __device__ MaterialType getType() const override { return MaterialType::GLOSSY; }
+
 
 private:
     __device__ static Vec3f_t reflect(const Vec3f_t& v, const Vec3f_t& n) {
@@ -256,4 +317,7 @@ public:
         const Intersection_t& hit) const override {
         return hit.frontFace ? emission_ * strength_ : Color_t(0.0f);
     }
-}; 
+
+    __device__ MaterialType getType() const override { return MaterialType::EMISSIVE; }
+
+};

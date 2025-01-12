@@ -10,6 +10,44 @@
 #include <chrono>
 #include <algorithm>
 #include "Error.cuh"
+#include "AgingUI.cuh"
+
+__global__ void updateMetalAgingKernel(Metal_t* material, const RustParameters* params) {
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        material->setRustParameters(*params);
+    }
+}
+
+__global__ void updateGlossyAgingKernel(Glossy_t* material, const PaintAgingParameters* params) {
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        material->setPaintParameters(*params);
+    }
+}
+
+__global__ void checkAndUpdateMetalKernel(Material_t* material, const RustParameters* params, bool* success) {
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        if (material->getType() == MaterialType::METAL) {
+            Metal_t* metal = static_cast<Metal_t*>(material);
+            metal->setRustParameters(*params);
+            *success = true;
+        } else {
+            *success = false;
+        }
+    }
+}
+
+__global__ void checkAndUpdateGlossyKernel(Material_t* material, const PaintAgingParameters* params, bool* success) {
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        if (material->getType() == MaterialType::GLOSSY) {
+            Glossy_t* glossy = static_cast<Glossy_t*>(material);
+            glossy->setPaintParameters(*params);
+            *success = true;
+        } else {
+            *success = false;
+        }
+    }
+}
+
 
 void checkCudaCapabilities() {
     int deviceCount;
@@ -38,6 +76,53 @@ void initializeCuda() {
         throw cudaGetErrorString(error);
     }
 }
+
+void updateMetalAging(Sphere_t* sphere, const AgingUI* aging_ui) {
+    if (!sphere || !aging_ui) return;
+
+    RustParameters host_params;
+    aging_ui->getRustParams(host_params);
+
+    // Create device pointers
+    RustParameters* d_params;
+    bool* d_success;
+    CUDA_CHECK(cudaMalloc(&d_params, sizeof(RustParameters)));
+    CUDA_CHECK(cudaMalloc(&d_success, sizeof(bool)));
+    CUDA_CHECK(cudaMemcpy(d_params, &host_params, sizeof(RustParameters), cudaMemcpyHostToDevice));
+
+    // Update the material parameters using the kernel
+    Material_t* material = sphere->getMaterial();
+    checkAndUpdateMetalKernel<<<1,1>>>(material, d_params, d_success);
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    // Cleanup
+    CUDA_CHECK(cudaFree(d_params));
+    CUDA_CHECK(cudaFree(d_success));
+}
+
+void updatePaintAging(Sphere_t* sphere, const AgingUI* aging_ui) {
+    if (!sphere || !aging_ui) return;
+
+    PaintAgingParameters host_params;
+    aging_ui->getPaintParams(host_params);
+
+    // Create device pointers
+    PaintAgingParameters* d_params;
+    bool* d_success;
+    CUDA_CHECK(cudaMalloc(&d_params, sizeof(PaintAgingParameters)));
+    CUDA_CHECK(cudaMalloc(&d_success, sizeof(bool)));
+    CUDA_CHECK(cudaMemcpy(d_params, &host_params, sizeof(PaintAgingParameters), cudaMemcpyHostToDevice));
+
+    // Update the material parameters using the kernel
+    Material_t* material = sphere->getMaterial();
+    checkAndUpdateGlossyKernel<<<1,1>>>(material, d_params, d_success);
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    // Cleanup
+    CUDA_CHECK(cudaFree(d_params));
+    CUDA_CHECK(cudaFree(d_success));
+}
+
 
 int main() {
     try {
@@ -283,6 +368,10 @@ int main() {
 
         while (window.processEvents()) {
             auto frame_start = std::chrono::high_resolution_clock::now();
+            AgingUI* aging_ui = window.getAgingUI();
+            aging_ui->render();
+            updateMetalAging(metal_sphere, aging_ui);
+            updatePaintAging(glossy_sphere, aging_ui);
             // Launch render kernel
             launchRenderKernel(d_output, window.getWidth(), window.getHeight(),
                              frame_count, grid, block);
